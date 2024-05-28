@@ -1,0 +1,73 @@
+---
+- name: Update apt cache and handle MongoDB GPG key expiration
+  hosts: all
+  become: yes
+  any_errors_fatal: true
+  vars:
+    mongodb_gpg_url: "https://www.mongodb.org/static/pgp/server-"
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is succeeded
+      retries: 5
+      delay: 5
+      failed_when: "'EXPKEYSIG' in apt_result.msg and 'https://repo.mongodb.org' in apt_result.msg"
+      notify: Fetch and add latest MongoDB GPG key
+
+    - name: Extract MongoDB version from error message
+      set_fact:
+        mongodb_version: "{{ apt_result.msg | regex_search('mongodb-org/(\\d+\\.\\d+) Release', '\\1') }}"
+      when: "'EXPKEYSIG' in apt_result.msg and 'https://repo.mongodb.org' in apt_result.msg"
+
+  handlers:
+    - name: Fetch and add latest MongoDB GPG key
+      shell: "wget -qO - {{ mongodb_gpg_url }}{{ mongodb_version }}.asc | sudo apt-key add -"
+      register: fetch_key_result
+      until: fetch_key_result is succeeded
+      retries: 5
+      delay: 5
+      notify: Retry apt update
+
+    - name: Retry apt update
+      apt:
+        update_cache: yes
+      register: retry_apt_result
+      until: retry_apt_result is succeeded
+      retries: 5
+      delay: 5
+
+
+
+
+
+
+
+
+
+
+
+Explanation:
+Update apt cache task:
+
+This task runs the apt module to update the cache.
+The task retries up to 5 times with a 5-second delay.
+The failed_when condition triggers if both 'EXPKEYSIG' and 'https://repo.mongodb.org' are in the error message.
+If the condition is met, it notifies the Fetch and add latest MongoDB GPG key handler.
+Extract MongoDB version task:
+
+This task uses set_fact to create a new fact mongodb_version.
+The regex_search function extracts the version number from the error message.
+This task runs only when the same failed_when condition is met.
+Handler to Fetch and Add the Latest MongoDB GPG key:
+
+Uses a shell task to fetch the MongoDB GPG key for the specific version.
+The URL is constructed using the mongodb_version fact.
+This handler also retries up to 5 times with a 5-second delay.
+If successful, it notifies the Retry apt update handler.
+Handler to Retry Apt Update:
+
+This task reruns the apt module to update the cache after the GPG key has been added.
+It ensures the apt cache is updated correctly after adding the new key.
+By extracting the version from the error message and passing it to the handler, the playbook dynamically fetches the correct MongoDB GPG key based on the version specified in the error.
