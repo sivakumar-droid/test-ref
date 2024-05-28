@@ -71,3 +71,150 @@ Handler to Retry Apt Update:
 This task reruns the apt module to update the cache after the GPG key has been added.
 It ensures the apt cache is updated correctly after adding the new key.
 By extracting the version from the error message and passing it to the handler, the playbook dynamically fetches the correct MongoDB GPG key based on the version specified in the error.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---
+- name: Update apt cache and handle MongoDB GPG key expiration
+  hosts: all
+  become: yes
+  any_errors_fatal: true
+  vars:
+    mongodb_gpg_url: "https://www.mongodb.org/static/pgp/server-"
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is succeeded
+      retries: 5
+      delay: 5
+      failed_when: apt_result.failed
+      notify: Handle MongoDB GPG key expiration
+
+  handlers:
+    - name: Handle MongoDB GPG key expiration
+      block:
+        - name: Check for MongoDB GPG key expiration
+          fail:
+            msg: "Apt update failed for reasons other than the MongoDB GPG key expiration."
+          when: "'EXPKEYSIG' not in apt_result.msg or 'https://repo.mongodb.org' not in apt_result.msg"
+
+        - name: Extract MongoDB version from error message
+          set_fact:
+            mongodb_version: "{{ apt_result.msg | regex_search('mongodb-org/(\\d+\\.\\d+) Release', '\\1') }}"
+
+        - name: Fetch and add latest MongoDB GPG key
+          shell: "wget -qO - {{ mongodb_gpg_url }}{{ mongodb_version }}.asc | sudo apt-key add -"
+          register: fetch_key_result
+          until: fetch_key_result is succeeded
+          retries: 5
+          delay: 5
+
+        - name: Retry apt update
+          apt:
+            update_cache: yes
+          register: retry_apt_result
+          until: retry_apt_result is succeeded
+          retries: 5
+          delay: 5
+      when: apt_result.failed
+
+
+
+
+
+
+To avoid ignoring errors while still ensuring the version extraction and subsequent actions, you can pass the apt_result to a handler. You can achieve this by using an intermediary task that triggers the handler if the apt update fails due to the specific MongoDB GPG key expiration error.
+
+Here's how you can structure the playbook:
+
+Run the apt update task and handle failure with a custom handler.
+Extract the MongoDB version in the handler.
+Download and add the latest MongoDB GPG key.
+Retry the apt update.
+yaml
+Copy code
+---
+- name: Update apt cache and handle MongoDB GPG key expiration
+  hosts: all
+  become: yes
+  any_errors_fatal: true
+  vars:
+    mongodb_gpg_url: "https://www.mongodb.org/static/pgp/server-"
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is succeeded
+      retries: 5
+      delay: 5
+      failed_when: apt_result.failed
+      notify: Handle MongoDB GPG key expiration
+
+  handlers:
+    - name: Handle MongoDB GPG key expiration
+      block:
+        - name: Check for MongoDB GPG key expiration
+          fail:
+            msg: "Apt update failed for reasons other than the MongoDB GPG key expiration."
+          when: "'EXPKEYSIG' not in apt_result.msg or 'https://repo.mongodb.org' not in apt_result.msg"
+
+        - name: Extract MongoDB version from error message
+          set_fact:
+            mongodb_version: "{{ apt_result.msg | regex_search('mongodb-org/(\\d+\\.\\d+) Release', '\\1') }}"
+
+        - name: Fetch and add latest MongoDB GPG key
+          shell: "wget -qO - {{ mongodb_gpg_url }}{{ mongodb_version }}.asc | sudo apt-key add -"
+          register: fetch_key_result
+          until: fetch_key_result is succeeded
+          retries: 5
+          delay: 5
+
+        - name: Retry apt update
+          apt:
+            update_cache: yes
+          register: retry_apt_result
+          until: retry_apt_result is succeeded
+          retries: 5
+          delay: 5
+      when: apt_result.failed
+Explanation:
+Update apt cache task:
+
+This task runs the apt module to update the cache.
+The task retries up to 5 times with a 5-second delay.
+The failed_when condition ensures the task registers a failure if it doesn't succeed after the retries.
+If the task fails, it triggers the Handle MongoDB GPG key expiration handler.
+Handler: Handle MongoDB GPG key expiration:
+
+Check for MongoDB GPG key expiration: This task checks if the failure is due to the MongoDB GPG key expiration. If the error message doesn't match the expected pattern, it explicitly fails the playbook with a relevant message.
+Extract MongoDB version from error message: This task extracts the MongoDB version from the error message using set_fact.
+Fetch and add latest MongoDB GPG key: This task fetches and adds the MongoDB GPG key for the specific version using a shell command.
+Retry apt update: This task retries the apt update to ensure the cache is updated correctly after adding the new key.
+By structuring the playbook this way, the main task doesn't ignore errors. Instead, it triggers a handler that checks for specific conditions, extracts necessary information, and retries the update process. This approach maintains the integrity of the playbook's execution flow.
+
+
+
+
+
+
+
